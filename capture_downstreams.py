@@ -2,6 +2,16 @@
 Capture a piece of all downstreams in a channel file and filter them by PID.
 
 This script works for me but it is fragile - error checking is non-existent.
+
+Usage:
+```
+sudo `which python` capture_downstreams.py \
+    downstreams.conf \
+    --prefix "Recording" \
+    --path /media/recordings \
+    -t 15 \
+    --skip_pid 8191
+```
 """
 import argparse
 import logging
@@ -56,7 +66,7 @@ def read_channels(channels: io.StringIO) -> Generator[Channel, None, None]:
 def pid_filter(pids: List[int]) -> str:
     """
     Return a disjunctive filter string to be used in wireshark/tshark that only
-    accepts pids in *pids*.
+    accepts pids in *pids* (if provided)
     """
     return " || ".join([f"(mp2t.pid == 0x{p:02x})" for p in pids])
 
@@ -67,7 +77,19 @@ def dvb_record_channels(channel_config: io.StringIO,
                         prefix: str = 'Capture',
                         path: str = '.',
                         duration: int = 15,
-                        pids: List[int] = [8191]):
+                        skip_pids: List[int] = [],
+                        pids: List[int] = []):
+    filter_str = ""
+    if skip_pids and pids:
+        print("--skip_pid and --pid were both used at the same time, this is "
+              "not possible, aborting")
+        return
+    elif skip_pids:
+        filter_str = f"!({pid_filter(skip_pids)})"
+    else:
+        filter_str = f"({pid_filter(pids)})"
+
+
     for channel in read_channels(channel_config):
         freq_mhz = channel.frequency // 10**6
         output_file_name = f"{path}/{prefix}_{channel.name}_{freq_mhz}.ts"
@@ -84,7 +106,7 @@ def dvb_record_channels(channel_config: io.StringIO,
         # Filter file using tshark
         filter_cmd = ['/usr/bin/tshark',
                       '-r', 'tmp.ts',
-                      '-Y', f"{pid_filter(pids)}",  # display filter
+                      '-R', filter_str, '-2', # read filter
                       '-w', output_file_name]
         LOG.info(" ".join(filter_cmd))
 
@@ -104,7 +126,10 @@ if __name__ == '__main__':
     parser.add_argument('channel_config', type=argparse.FileType('r'),
                         help='channel file in dvbv5-zap format')
     parser.add_argument('--pid', dest='pids', type=int, action='append',
-                        help='pid(s) to keep (can be repeated), default=8191')
+                        help='pid(s) to keep, default=all')
+    parser.add_argument('--skip_pid', dest='skip_pids', type=int,
+                        action='append', help='pid(s) to skip, '
+                        'pid and skip_pid are mutually exclusive')
     parser.add_argument('--prefix', type=str, default='Capture',
                         help='Prefix for the file names')
     parser.add_argument('--path', type=str, default='.',
