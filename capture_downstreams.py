@@ -1,8 +1,7 @@
 """
 Capture a piece of all downstreams in a channel file and filter them by PID.
 
-Needs recent tshark (use PPA on 16.04) in order to filter. Otherwise the script
-does not run (tshark fails & it continues)
+This script works for me but it is fragile - error checking is non-existent.
 """
 import argparse
 import logging
@@ -23,6 +22,7 @@ class Channel(NamedTuple):
     """
     name: str
     delivery_system: str
+    # Frequency in Hertz
     frequency: int
     symbol_rate: int
     inner_fec: str
@@ -61,14 +61,13 @@ def pid_filter(pids: List[int]) -> str:
     return " || ".join([f"(mp2t.pid == 0x{p:02x})" for p in pids])
 
 
-def dvb_capture(channel_config: io.StringIO,
-                config_file: str,
-                verbose: bool = False,
-                prefix: str = 'Capture',
-                path: str = '.',
-                duration: int = 15,
-                pids: List[int] = [8191],
-                ):
+def dvb_record_channels(channel_config: io.StringIO,
+                        config_file: str,
+                        verbose: bool = False,
+                        prefix: str = 'Capture',
+                        path: str = '.',
+                        duration: int = 15,
+                        pids: List[int] = [8191]):
     for channel in read_channels(channel_config):
         freq_mhz = channel.frequency // 10**6
         output_file_name = f"{path}/{prefix}_{channel.name}_{freq_mhz}.ts"
@@ -82,6 +81,7 @@ def dvb_capture(channel_config: io.StringIO,
         LOG.info(" ".join(capture_cmd))
         subprocess.call(capture_cmd)
 
+        # Filter file using tshark
         filter_cmd = ['/usr/bin/tshark',
                       '-r', 'tmp.ts',
                       '-Y', f"{pid_filter(pids)}",  # display filter
@@ -89,12 +89,14 @@ def dvb_capture(channel_config: io.StringIO,
         LOG.info(" ".join(filter_cmd))
 
         subprocess.call(filter_cmd)
+        # Remove the temporary file
         os.remove('tmp.ts')
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
-        description='Capture DVB stream fragments')
+        description='Record part of the DVB-C stream for each mux in a channel'
+                    ' file and filter it by pid')
     parser.add_argument('--verbose', action='store_true', default=False,
                         help='verbose output')
     parser.add_argument('-t', '--duration', type=int, default=15,
@@ -102,7 +104,7 @@ if __name__ == '__main__':
     parser.add_argument('channel_config', type=argparse.FileType('r'),
                         help='channel file in dvbv5-zap format')
     parser.add_argument('--pid', dest='pids', type=int, action='append',
-                        help='pid number(s) to keep (can be repeated), default=8191')
+                        help='pid(s) to keep (can be repeated), default=8191')
     parser.add_argument('--prefix', type=str, default='Capture',
                         help='Prefix for the file names')
     parser.add_argument('--path', type=str, default='.',
@@ -117,7 +119,7 @@ if __name__ == '__main__':
         logging.getLogger().setLevel(logging.INFO)
 
     if args:
-        dvb_capture(config_file=args.channel_config.name,
-                    **{ k:v for k,v in args.__dict__.items() if v})
+        dvb_record_channels(config_file=args.channel_config.name,
+                            **{k: v for k, v in args.__dict__.items() if v})
     else:
         parser.print_help()
